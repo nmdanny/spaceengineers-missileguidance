@@ -21,39 +21,27 @@ namespace IngameScript
 {
     partial class Program : MyGridProgram
     {
-        IMyProgrammableBlock missilePb;
-        IMyBroadcastListener missileMsgListener;
-        IMyBroadcastListener missileStatusListener;
-        List<IMyTextSurface> statusDisplays = new List<IMyTextSurface>();
+        private IMyProgrammableBlock missilePb;
+        private IMyBroadcastListener missileMsgListener;
+        private IMyBroadcastListener missileStatusListener;
+        private Logger statusLogger;
+        private Logger missileDiagLogger;
 
         private const string STATUS_DISPLAY_SECTION = "MissileStatus";
+        private const string LOG_DISPLAY_SECTION = "MissileLog";
         private void LogLine(String msg)
         {
             IMyTextSurfaceProvider prov = Me; 
             var disp = Me.GetSurface(0);
             disp.ContentType = ContentType.TEXT_AND_IMAGE;
             Echo(msg);
-            disp.WriteText(msg + Environment.NewLine, true);
+            this.missileDiagLogger.OutputLine(msg, true);
         }
 
         public Program()
         {
-            ResetDisplay();
-            var displays = new List<IMyTerminalBlock>();
-            GridTerminalSystem.GetBlocksOfType(displays, cg => MyIni.HasSection(cg.CustomData, STATUS_DISPLAY_SECTION));
-            foreach (var block in displays)
-            {
-                if (block is IMyTextSurfaceProvider)
-                {
-                    var disp = (IMyTextSurfaceProvider)block;
-                    var surf = disp.GetSurface(0);
-                    surf.ContentType = ContentType.TEXT_AND_IMAGE;
-                    surf.WriteText("Missile Status", false);
-                    this.statusDisplays.Add(surf);
-                    LogLine($"Found display for missile status: '{block.CustomName}'");
-                    
-                }
-            }
+            this.statusLogger = new Logger(this, STATUS_DISPLAY_SECTION, true);
+            this.missileDiagLogger = new Logger(this, LOG_DISPLAY_SECTION, true);
 
             missilePb = GridTerminalSystem.GetBlockOfType<IMyProgrammableBlock>(pb => pb.CubeGrid != Me.CubeGrid);
             if (missilePb != null && missilePb.TryRun(MissileCommons.DEFAULT_TAG))
@@ -99,11 +87,7 @@ namespace IngameScript
                 if (missileStatusListener.HasPendingMessage)
                 {
                     var msg = missileStatusListener.AcceptMessage();
-                    LogLine($"StatusListener: {msg.Data.ToString()}");
-                    foreach (var disp in statusDisplays)
-                    {
-                        disp.WriteText(msg.Data.ToString(), false);
-                    }
+                    statusLogger.OutputLine(msg.Data.ToString());
                 }
 
             } 

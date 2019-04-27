@@ -39,21 +39,23 @@ namespace IngameScript
             }
         }
 
+        private const double SWITCH_WAY_POINT_DISTANCE = 100;
         private const double ARM_DISTANCE = 100;
         private const double BLOW_DISTANCE = 25;
-        private const double BOOST_MANEUVER_RANGE = 25;
+        private const double BOOST_MANEUVER_RANGE = 250;
+        private const double MIN_ANGLE_FOR_ENGINE_RESTART = 25;
         private const string STATUS_DISPLAY_SECTION = "MissileStatus";
         private const string SETTINGS_SECTION = "Settings";
 
-        private List<IMyTextSurface> statusDisplays = new List<IMyTextSurface>();
+        private Logger statusLogger;
 
         private PIDController pitchPID = new PIDController();
         private PIDController yawPID = new PIDController();
         private PIDController rollPID = new PIDController();
         private const double PID_TIME_DELTA = 10.0 / 60.0;
         private const double DEFAULT_KP = 5;
-        private const double DEFAULT_KI = 0;
-        private const double DEFAULT_KD = 5;
+        private const double DEFAULT_KI = 1.5;
+        private const double DEFAULT_KD = 0.5;
         private bool applyGyro = true;
 
         private LaunchState state = LaunchState.PreLaunch;
@@ -64,8 +66,10 @@ namespace IngameScript
         private List<IMyWarhead> warheads = new List<IMyWarhead>();
         private IMyRemoteControl remote; // assumed to be pointing forward
         private IMyBroadcastListener cmdListener;
-        private MyWaypointInfo target;
+        private MyWaypointInfo finalTarget;
         private bool armed = false;
+        private bool enginesActive = false;
+
 
         private List<MyWaypointInfo> trajectory = new List<MyWaypointInfo>();
         private int trajectoryStage = -1;
@@ -131,29 +135,7 @@ namespace IngameScript
 
                 }
 
-                var blocks = new List<IMyTerminalBlock>();
-                GridTerminalSystem.GetBlocksOfType(blocks, b => b.CubeGrid == Me.CubeGrid && MyIni.HasSection(b.CustomData, STATUS_DISPLAY_SECTION));
-                foreach (var block in blocks)
-                {
-                    var prov = block as IMyTextSurfaceProvider;
-                    if (prov != null)
-                    {
-                        var sfc = prov.GetSurface(0);
-                        sfc.ContentType = ContentType.TEXT_AND_IMAGE;
-                        sfc.WriteText(string.Empty, false);
-                        this.statusDisplays.Add(sfc);
-                        LogLine($"Found status display: {block.CustomName}");
-                    }
-                    var tpanel = block as IMyTextPanel;
-                    if (tpanel != null)
-                    {
-                        tpanel.ContentType = ContentType.TEXT_AND_IMAGE;
-                        tpanel.WriteText(string.Empty, false);
-                        this.statusDisplays.Add(tpanel);
-                        LogLine($"Found status display: {block.CustomName}");
-                    }
-
-                }
+                this.statusLogger = new Logger(this, STATUS_DISPLAY_SECTION, true);
 
 
                 GridTerminalSystem.GetBlocksOfType(allThrusters, th => th.CubeGrid == Me.CubeGrid);
@@ -232,21 +214,26 @@ namespace IngameScript
             this.state = LaunchState.Boost;
             this.launchPos = this.Position;
             this.launchVec = this.remote.WorldMatrix.Forward;
-            LogLine($"Launching to '{target.Name}'\nOrigin coords: {launchPos}\nDestination coords: {target.Coords}");
+            LogLine($"Launching to '{finalTarget.Name}'\nOrigin coords: {launchPos}\nDestination coords: {finalTarget.Coords}");
 
             if (separator != null)
             {
                 separator.Enabled = false;
             }
-            foreach (var thrust in fwdThrusters)
+            foreach (var thrust in allThrusters)
             {
                 thrust.Enabled = true;
-                //thrust.ThrustOverridePercentage = 1;
+            }
+            foreach (var thrust in fwdThrusters)
+            {
+                thrust.ThrustOverridePercentage = 1;
             }
             foreach (var gyros in gyros)
             {
                 gyros.Enabled = true;
             }
+            this.remote.DampenersOverride = true;
+            this.enginesActive = true;
             Runtime.UpdateFrequency = UpdateFrequency.Update10;
         }
 
@@ -266,12 +253,13 @@ namespace IngameScript
                 {
                     return this.launchPos + BOOST_MANEUVER_RANGE * this.launchVec;
                 }
-                if (this.trajectoryStage < this.trajectory.Count)
+                if (this.state == LaunchState.Flight)
                 {
                     return this.trajectory[this.trajectoryStage].Coords;
                 }
-                return Vector3D.Zero;
+                return finalTarget.Coords;
             } }
+
 
         private void Tick()
         {
@@ -282,9 +270,7 @@ namespace IngameScript
             };
             if (state == LaunchState.Boost)
             {
-                // skip boost stage for now
-                if (true)
-                //if ((this.Position - this.launchPos).LengthSquared() >= BOOST_MANEUVER_RANGE * BOOST_MANEUVER_RANGE)
+                if ((this.Position - this.launchPos).LengthSquared() >= BOOST_MANEUVER_RANGE * BOOST_MANEUVER_RANGE)
                 {
                     LogLine($"Boost phase finished, transitioning to parabolic flight mode");
                     this.state = LaunchState.Flight;
@@ -294,11 +280,7 @@ namespace IngameScript
                         gyro.Enabled = true;
                     }
 
-                    foreach (var thruster in allThrusters)
-                    {
-                        thruster.Enabled = true;
-                        thruster.ThrustOverridePercentage = 0;
-                    }
+                    this.enginesActive = false;
                     Vector3D planet = Vector3D.Zero;
                     if (!remote.TryGetPlanetPosition(out planet))
                     {
@@ -306,9 +288,15 @@ namespace IngameScript
                     }
 
                     LogLine($"Generating parabolic trajectory");
-                    this.trajectory = GenerateTrajectory(this.Position, this.target.Coords, 10, planet);
+                    this.trajectory = GenerateTrajectory(this.Position, this.finalTarget.Coords, 10, planet);
                     this.trajectoryStage = 0;
                     this.state = LaunchState.Flight;
+
+                    // temporarily stop forward thrust in order to allow missile to align to target
+                    foreach (var thruster in fwdThrusters)
+                    {
+                        thruster.ThrustOverride = 0;
+                    }
 
                 }
             }
@@ -324,6 +312,16 @@ namespace IngameScript
                 status.Yaw = yaw;
                 status.Roll = roll;
 
+                if (!this.enginesActive && (Math.Abs(pitch) < MIN_ANGLE_FOR_ENGINE_RESTART || 
+                    Math.Abs(yaw) < MIN_ANGLE_FOR_ENGINE_RESTART || Math.Abs(roll) < MIN_ANGLE_FOR_ENGINE_RESTART))
+                {
+                    foreach (var thrust in fwdThrusters)
+                    {
+                        thrust.ThrustOverridePercentage = 1;
+                    }
+                    this.enginesActive = true;
+                }
+
                 var pitchCorrection = pitchPID.GetCorrection(pitch, PID_TIME_DELTA);
                 var yawCorrection = yawPID.GetCorrection(yaw, PID_TIME_DELTA);
                 var rollCorrection = rollPID.GetCorrection(roll, PID_TIME_DELTA);
@@ -335,11 +333,31 @@ namespace IngameScript
                     MathStuff.ApplyGyroOverride(pitchCorrection, yawCorrection, rollCorrection, this.gyros, this.remote.WorldMatrix);
                 }
 
-
-                if (!armed && (this.Position - target.Coords).LengthSquared() <= ARM_DISTANCE * ARM_DISTANCE)
+                if ((this.Position - Target).LengthSquared() <= SWITCH_WAY_POINT_DISTANCE * SWITCH_WAY_POINT_DISTANCE)
                 {
-                    //ArmMissile();
-                    //this.state = LaunchState.Terminal;
+                    this.trajectoryStage++;
+                } 
+
+                if (this.trajectoryStage >= this.trajectory.Count ||
+                    (this.Position - finalTarget.Coords).LengthSquared() <= ARM_DISTANCE * ARM_DISTANCE)
+                {
+                    ArmMissile();
+                    this.trajectoryStage++;
+                    this.state = LaunchState.Terminal;
+                }
+            }
+            if (state == LaunchState.Terminal)
+            {
+                if ((this.Position - finalTarget.Coords).LengthSquared() <= BLOW_DISTANCE * BLOW_DISTANCE)
+                {
+                    Runtime.UpdateFrequency = UpdateFrequency.None;
+                    this.cmdListener.DisableMessageCallback();
+                    LogLine("Reached detonation threshold. Detonating and disabling script.");
+                    LogStatus("Detonated.");
+                    foreach (var wh in warheads)
+                    {
+                        wh.Detonate();
+                    }
                 }
             }
             status.State = this.state;
@@ -348,17 +366,16 @@ namespace IngameScript
 
         private void ArmMissile()
         {
-            armed = true;
+            if (this.armed)
+            {
+                return;
+            }
+            this.armed = true;
             foreach (var wh in warheads)
             {
                 wh.IsArmed = true;
             }
-            foreach (var th in allThrusters)
-            {
-                th.Enabled = false;
-            }
-            LogLine($"Entering terminal mode, warhead is armed, script is disabled");
-            Runtime.UpdateFrequency = UpdateFrequency.None;
+            LogLine($"Entering terminal mode, warheads armed");
         }
 
         private void registerTag(string tag)
@@ -373,10 +390,8 @@ namespace IngameScript
         {
             var statusString = status.ToString();
             IGC.SendBroadcastMessage(MissileCommons.STATUS_TAG, statusString);
-            foreach (var disp in statusDisplays)
-            {
-                disp.WriteText(statusString, false);
-            }
+            this.statusLogger.OutputLine(statusString, false);
+
         }
 
         public void Main(string argument, UpdateType updateSource)
@@ -396,16 +411,18 @@ namespace IngameScript
                 {
                     if (cmdListener.HasPendingMessage)
                     {
-                        var msg = (string)cmdListener.AcceptMessage().Data;
+                        var msg = cmdListener.AcceptMessage();
+                        var data = (string)msg.Data;
                         MyWaypointInfo tgt;
-                        if (MyWaypointInfo.TryParse(msg, out tgt))
+                        if (MyWaypointInfo.TryParse(data, out tgt))
                         {
-                            this.target = tgt;
+                            this.finalTarget = tgt;
                             Launch();
                         }
                         else
                         {
-                            LogLine($"Missile IGC received unknown msg \"{msg}\"");
+                            // prevent spam
+                            // LogLine($"Missile IGC received unknown msg \"{msg.Data}\" from {msg.Source}");
                         }
                     }
                 }
