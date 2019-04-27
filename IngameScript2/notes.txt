@@ -1,0 +1,10 @@
+﻿Tested PID values for gyroscopes:
+### Good for smootish operations, but oscilates out of control for drastic operations
+Kp: 5
+Ki:	3
+Kd: 0.1
+
+# Also smooth, might oscilate on drastic turns, but recovers eventually.
+Kp: 5
+Ki:	1.5
+Kd: 0.5
