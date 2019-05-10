@@ -82,6 +82,14 @@ namespace IngameScript
             Me.GetSurface(0).ContentType = VRage.Game.GUI.TextPanel.ContentType.TEXT_AND_IMAGE;
             Me.GetSurface(0).WriteText(string.Empty, false);
         }
+
+        public static string GetRandomString(int length)
+        {
+            Random rand = new Random();
+            const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            return new string(Enumerable.Repeat(alphabet, length)
+                .Select(s => s[rand.Next(s.Length)]).ToArray());
+        }
     }
     public static class Extensions
     {
