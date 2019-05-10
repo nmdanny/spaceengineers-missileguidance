@@ -16,9 +16,11 @@ using VRage.Game.ObjectBuilders.Definitions;
 using VRage.Game;
 using VRage;
 using VRageMath;
-
+using System.Collections.Immutable;
 namespace IngameScript
 {
+
+
     partial class Program
     {
         public enum LaunchState
@@ -51,11 +53,80 @@ namespace IngameScript
                     $"Pitch: {PitchDeg:F2} Yaw: {YawDeg:F2} Roll: {RollDeg:F2}\n{ExtraData}";
             }
         }
+
+
         public static class MissileCommons
         {
             public const string DEFAULT_TAG = "SRBM_T";
             public const string STATUS_TAG = "SRBM_STATUS";
 
+        }
+    }
+
+    public enum MissileCommandTag : int
+    {
+        Launch = 1337,
+        ChangeTarget = 1338
+    }
+
+
+    
+    public abstract class MissileCommand<TData> : Command<TData>
+    {
+    }
+    public sealed class LaunchCommand : MissileCommand<MyTuple<Vector3D>>
+    {
+        
+        public Vector3D Destination { get; private set; }
+
+        protected override CommandFactory LocalFactory => FactoryInstance;
+        public static readonly Factory<LaunchCommand> FactoryInstance = new Factory<LaunchCommand>((int)MissileCommandTag.Launch);
+
+        public LaunchCommand() { }
+
+        public LaunchCommand(Vector3D coord)
+        {
+            this.Destination = coord;
+        }
+
+
+
+        protected override void Deserialize(MyTuple<Vector3D> arr)
+        {
+            this.Destination = arr.Item1;
+        }
+
+        protected override MyTuple<Vector3D> Serialize()
+        {
+            return MyTuple.Create(this.Destination);
+        }
+    }
+
+    public sealed class ChangeTarget : MissileCommand<MyTuple<Vector3D>>
+    {
+
+        public Vector3D NewTarget { get; private set; }
+
+        protected override CommandFactory LocalFactory => FactoryInstance;
+        public static readonly Factory<ChangeTarget> FactoryInstance = new Factory<ChangeTarget>((int)MissileCommandTag.ChangeTarget);
+
+
+        public ChangeTarget() { }
+        public ChangeTarget(Vector3D newTarget)
+        {
+            this.NewTarget = newTarget;
+        }
+
+
+
+        protected override void Deserialize(MyTuple<Vector3D> tup)
+        {
+            this.NewTarget = tup.Item1;
+        }
+
+        protected override MyTuple<Vector3D> Serialize()
+        {
+            return MyTuple.Create(this.NewTarget);
         }
     }
 }

@@ -17,14 +17,13 @@ using VRage.Game;
 using VRage;
 using VRageMath;
 
-
-
 namespace IngameScript
 {
 
+
     partial class Program : MyGridProgram
     {
-        
+
 
         private void LogLine(string msg, bool broadcast=true)
         {
@@ -33,9 +32,47 @@ namespace IngameScript
             disp.ContentType = ContentType.TEXT_AND_IMAGE;
             disp.WriteText(msg + Environment.NewLine, true);
             Echo(msg + Environment.NewLine);
-            if (cmdListener != null && broadcast)
+            if (this.msgHandler != null && broadcast)
             {
-                IGC.SendBroadcastMessage(cmdListener.Tag, $"[{uuid}] {msg}");
+                // TODO: this belongs to a MessageSender class(maybe)
+                IGC.SendBroadcastMessage(this.tag, $"[{uuid}] {msg}");
+            }
+        }
+
+        public class MissileMessageHandler: MessageHandler
+        {
+            private readonly Program program;
+            public MissileMessageHandler(Program program, string tag=MissileCommons.DEFAULT_TAG):
+                base(program.IGC, tag, new CommandFactory[] {
+                    LaunchCommand.FactoryInstance, ChangeTarget.FactoryInstance
+                }, msg => program.LogLine(msg, false))
+            {
+                this.program = program;
+            }
+
+            private void HandleSpecific(LaunchCommand command, long source)
+            {
+                program.finalTarget = new MyWaypointInfo("Final-Destination", command.Destination);
+                program.Launch();
+            }
+            private void HandleSpecific(ChangeTarget command, long source)
+            {
+                program.finalTarget = new MyWaypointInfo("Final-Destination", command.NewTarget);
+            }
+
+            protected override void HandleMessage(object command, long source)
+            {
+                if (command is LaunchCommand)
+                {
+                    HandleSpecific((LaunchCommand)command, source);
+                }
+                else if (command is ChangeTarget)
+                {
+                    HandleSpecific((ChangeTarget)command, source);
+                } else
+                {
+                    throw new ArgumentException($"Received invalid command object from source {source}: {command}");
+                }
             }
         }
 
@@ -72,7 +109,8 @@ namespace IngameScript
         private List<IMyWarhead> warheads = new List<IMyWarhead>();
         private List<IMyRadioAntenna> antennas = new List<IMyRadioAntenna>();
         private IMyRemoteControl remote; // assumed to be pointing forward
-        private IMyBroadcastListener cmdListener;
+        private MissileMessageHandler msgHandler;
+
         private MyWaypointInfo finalTarget;
         private bool armed = false;
         private bool enginesActive = false;
@@ -109,8 +147,9 @@ namespace IngameScript
             LogLine($"Boost range: {boostManeuverRange:F2}, arm distance: {armDistance:F2}, blow distance: {blowDistance:F2}", false);
 
             this.tag = parser.Get(SETTINGS_SECTION, "tag").ToString(MissileCommons.DEFAULT_TAG);
+            this.msgHandler = new MissileMessageHandler(this, tag);
+
             this.statusTag = parser.Get(SETTINGS_SECTION, "statusTag").ToString(MissileCommons.STATUS_TAG);
-            this.registerTag(tag);
             if (!this.applyGyro)
             {
                 foreach (var gyro in this.gyros)
@@ -194,6 +233,7 @@ namespace IngameScript
                     ant.Enabled = false;
                     ant.Radius = 50000f;
                     ant.CustomName = $"{uuid} Antenna";
+                    ant.AttachedProgrammableBlock = this.Me.EntityId;
                 }
 
                 LogLine("Missile is ready to launch");
@@ -386,7 +426,7 @@ namespace IngameScript
                 if ((this.Position - finalTarget.Coords).LengthSquared() <= blowDistance * blowDistance)
                 {
                     Runtime.UpdateFrequency = UpdateFrequency.None;
-                    this.cmdListener.DisableMessageCallback();
+                    this.msgHandler.Dispose();
                     LogLine("Reached detonation threshold. Detonating and disabling script.");
                     LogStatus("Detonated.");
                     foreach (var wh in warheads)
@@ -413,18 +453,6 @@ namespace IngameScript
             LogLine($"Entering terminal mode, warheads armed");
         }
 
-        private void registerTag(string tag)
-        {
-            if (cmdListener != null)
-            {
-                cmdListener.DisableMessageCallback();
-            }
-            cmdListener = IGC.RegisterBroadcastListener(tag);
-            cmdListener.SetMessageCallback();
-            LogLine($"Missile IGC registered with command tag \"{cmdListener.Tag}\", using status tag: \"{statusTag}\"");
-
-        }
-
         private void LogStatus<TData>(TData status)
         {
             var statusString = $"[{uuid}] {status}";
@@ -437,35 +465,15 @@ namespace IngameScript
         {
             try
             {
-                if ((updateSource & UpdateType.Terminal) == UpdateType.Terminal)
+                if ((updateSource & (UpdateType.Terminal | UpdateType.Script)) != 0)
                 {
-                    LogLine("Updating settings...");
+                    LogLine("Updating settings");
                     UpdateSettings();
                 }
-                if ((updateSource & UpdateType.Script) == UpdateType.Script)
+                if ((updateSource & UpdateType.IGC) != 0)
                 {
-                    registerTag(argument);
-                }
-                else if ((updateSource & UpdateType.IGC) == UpdateType.IGC)
-                {
-                    if (cmdListener.HasPendingMessage)
-                    {
-                        var msg = cmdListener.AcceptMessage();
-                        var data = (string)msg.Data;
-                        MyWaypointInfo tgt;
-                        if (MyWaypointInfo.TryParse(data, out tgt))
-                        {
-                            this.finalTarget = tgt;
-                            Launch();
-                        }
-                        else
-                        {
-                            // prevent spam
-                            // LogLine($"Missile IGC received unknown msg \"{msg.Data}\" from {msg.Source}");
-                        }
-                    }
-                }
-                else
+                    this.msgHandler.Tick();
+                } else
                 {
                     Tick();
                 }

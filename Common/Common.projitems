@@ -11,6 +11,7 @@
   <ItemGroup>
     <Compile Include="$(MSBuildThisFileDirectory)Commons.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)MathStuff.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Messaging.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)MissileCommons.cs" />
   </ItemGroup>
 </Project>
