@@ -233,7 +233,6 @@ namespace IngameScript
                     ant.Enabled = false;
                     ant.Radius = 50000f;
                     ant.CustomName = $"{uuid} Antenna";
-                    ant.AttachedProgrammableBlock = this.Me.EntityId;
                 }
 
                 LogLine("Missile is ready to launch");

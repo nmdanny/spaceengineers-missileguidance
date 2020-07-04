@@ -144,10 +144,11 @@ namespace IngameScript
                 }
                 if ((updateSource & UpdateType.Update100) == UpdateType.Update100)
                 {
-                    if (this.directing)
+                    if (this.directorTurret.IsUnderControl)
                     {
                         var azimuth = this.directorTurret.Azimuth;
                         var elev = this.directorTurret.Elevation;
+
                     }
                 }
             }
