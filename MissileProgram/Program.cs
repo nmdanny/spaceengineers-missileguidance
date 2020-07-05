@@ -58,6 +58,9 @@ namespace IngameScript
             private void HandleSpecific(ChangeTarget command, long source)
             {
                 program.finalTarget = new MyWaypointInfo("Final-Destination", command.NewTarget);
+                program.LogLine($"New final target at {program.finalTarget.Coords}");
+            }
+
             private void HandleSpecific(Abort abort, long source)
             {
                 if (program.state != LaunchState.PreLaunch)
@@ -94,6 +97,8 @@ namespace IngameScript
 
         private const double DEFAULT_BLOW_DISTANCE = 15;
         private const double DEFAULT_BOOST_MANEUVER_RANGE = 75;
+        private const double DEFAULT_DOWN_SEPARATION_RANGE = 0;
+        private const double DEFAULT_SEPARATION_EPSILON = 0;
         private const double SWITCH_WAY_POINT_DISTANCE = 100;
         private const double DEFAULT_ARM_DISTANCE = 100;
         private const double MIN_ANGLE_FOR_ENGINE_RESTART = 25;
@@ -118,9 +123,24 @@ namespace IngameScript
         private string tag = MissileCommons.DEFAULT_TAG;
         private string statusTag = MissileCommons.STATUS_TAG;
 
-        private LaunchState state = LaunchState.PreLaunch;
+        private LaunchState _state = LaunchState.PreLaunch;
+
+        private LaunchState state
+        {
+            get { return _state; }
+            set
+            {
+                this.remote.CubeGrid.CustomName = $"{uuid} - {value}";
+                LogLine($"Switched launch state from {_state} to {value}");
+                LogStatus($"Switched from {_state} to {value}");
+                _state = value;
+            }
+        }
+
         private IMyShipMergeBlock separator;
+        // thruster directions mean the direction of movement, e.g "fwdThrusters" move the ship forward
         private List<IMyThrust> fwdThrusters = new List<IMyThrust>();
+        private List<IMyThrust> downThrusters = new List<IMyThrust>();
         private List<IMyGyro> gyros = new List<IMyGyro>();
         private List<IMyThrust> allThrusters = new List<IMyThrust>();
         private List<IMyWarhead> warheads = new List<IMyWarhead>();
@@ -134,6 +154,9 @@ namespace IngameScript
 
         private double blowDistance;
         private double boostManeuverRange;
+        private double downSeparationRange;
+        private double separationEpsilon;
+
         private double armDistance;
 
 
@@ -141,8 +164,10 @@ namespace IngameScript
         private List<MyWaypointInfo> trajectory = new List<MyWaypointInfo>();
         private int trajectoryStage = -1;
 
+        private DateTime launchTime;
         private Vector3D launchPos;
-        private Vector3D launchVec;
+        private Vector3D launchForwardVec;
+        private Vector3D launchDownVec;
 
         private void UpdateSettings()
         {
@@ -160,8 +185,11 @@ namespace IngameScript
 
             this.blowDistance = parser.Get(SETTINGS_SECTION, "blowDistance").ToDouble(DEFAULT_BLOW_DISTANCE);
             this.boostManeuverRange = parser.Get(SETTINGS_SECTION, "boostRange").ToDouble(DEFAULT_BOOST_MANEUVER_RANGE);
+            this.downSeparationRange = parser.Get(SETTINGS_SECTION, "downSeparationRange").ToDouble(DEFAULT_DOWN_SEPARATION_RANGE);
+            this.separationEpsilon = parser.Get(SETTINGS_SECTION, "separationEpsilon").ToDouble(DEFAULT_SEPARATION_EPSILON);
             this.armDistance = parser.Get(SETTINGS_SECTION, "armDistance").ToDouble(DEFAULT_ARM_DISTANCE);
             LogLine($"Boost range: {boostManeuverRange:F2}, arm distance: {armDistance:F2}, blow distance: {blowDistance:F2}", false);
+            LogLine($"down separation range: {downSeparationRange:F2} with epsilon: {separationEpsilon:F2}", false);
 
             this.tag = parser.Get(SETTINGS_SECTION, "tag").ToString(MissileCommons.DEFAULT_TAG);
             this.msgHandler = new MissileMessageHandler(this, tag);
@@ -197,7 +225,7 @@ namespace IngameScript
                 ResetDisplay();
 
                 this.remote = GridTerminalSystem.GetBlockOfType<IMyRemoteControl>(rm => rm.CubeGrid == Me.CubeGrid);
-                
+
                 if (remote == null)
                 {
                     throw new InvalidOperationException("Missile MUST have a remote. (That is forward facing)");
@@ -216,7 +244,6 @@ namespace IngameScript
 
                 this.statusLogger = new Logger(this, STATUS_DISPLAY_SECTION, true);
 
-
                 GridTerminalSystem.GetBlocksOfType(allThrusters, th => th.CubeGrid == Me.CubeGrid);
 
                 foreach (var thruster in allThrusters)
@@ -225,6 +252,11 @@ namespace IngameScript
                     {
                         fwdThrusters.Add(thruster);
                         LogLine($"Found forward thruster {thruster.CustomName}");
+                    }
+                    if (thruster.WorldMatrix.Forward == remote.WorldMatrix.Up)
+                    {
+                        downThrusters.Add(thruster);
+                        LogLine($"Found down thruster {thruster.CustomName}");
                     }
                     thruster.Enabled = false;
                     thruster.ThrustOverridePercentage = 0;
@@ -257,7 +289,7 @@ namespace IngameScript
             }
             catch (Exception ex)
             {
-                LogLine($"Program() expection: {ex}\nStacktrace: \n{ex.StackTrace}");
+                LogLine($"[{uuid}] Program() expection: {ex}\nStacktrace: \n{ex.StackTrace}");
             }
         }
 
@@ -297,9 +329,6 @@ namespace IngameScript
 
         private void Launch()
         {
-            this.state = LaunchState.Boost;
-            this.launchPos = this.Position;
-            this.launchVec = this.remote.WorldMatrix.Forward;
             LogLine($"Launching to '{finalTarget.Name}'\nOrigin coords: {launchPos}\nDestination coords: {finalTarget.Coords}");
 
             if (separator != null)
@@ -309,22 +338,28 @@ namespace IngameScript
             foreach (var thrust in allThrusters)
             {
                 thrust.Enabled = true;
+                thrust.ThrustOverridePercentage = 0;
             }
-            foreach (var thrust in fwdThrusters)
+            foreach (var thrust in downThrusters)
             {
-                thrust.ThrustOverridePercentage = 1;
+                thrust.ThrustOverridePercentage = 0.1f;
+            }
+            foreach (var ant in antennas)
+            {
+                ant.Enabled = true;
             }
             foreach (var gyro in gyros)
             {
                 gyro.Enabled = true;
                 gyro.GyroOverride = false;
             }
-            foreach (var ant in antennas)
-            {
-                ant.Enabled = true;
-            }
             this.remote.DampenersOverride = true;
             this.enginesActive = true;
+            this.state = LaunchState.Separation;
+            this.launchPos = this.Position;
+            this.launchForwardVec = this.remote.WorldMatrix.Forward;
+            this.launchDownVec = this.remote.WorldMatrix.Down;
+            this.launchTime = DateTime.Now;
             Runtime.UpdateFrequency = UpdateFrequency.Update10;
         }
 
@@ -340,9 +375,13 @@ namespace IngameScript
 
         public Vector3D Target { get
             {
+                if (this.state == LaunchState.Separation)
+                {
+                    return this.launchPos + downSeparationRange * this.launchDownVec;
+                }
                 if (this.state == LaunchState.Boost)
                 {
-                    return this.launchPos + boostManeuverRange * this.launchVec;
+                    return this.launchPos + boostManeuverRange * this.launchForwardVec;
                 }
                 if (this.state == LaunchState.Flight)
                 {
@@ -358,8 +397,28 @@ namespace IngameScript
             {
                 Position = this.Position,
                 State = state,
+                DistToTarget = (this.Target - this.Position).Length(),
             };
-            if (state == LaunchState.Boost)
+            status.ExtraData.AppendLine($"DeltaTime: {(DateTime.Now - launchTime).TotalSeconds:F2} seconds");
+            status.ExtraData.AppendLine($"Distance from launch position: {(this.Position - this.launchPos).Length():F2}");
+            if (state == LaunchState.Separation)
+            {
+                if ((this.Position - this.Target).LengthSquared() <= separationEpsilon * separationEpsilon)
+                {
+                    LogLine($"Separation phase finished, transitioning to boost phase");
+                    foreach (var thrust in downThrusters)
+                    {
+                        thrust.ThrustOverridePercentage = 0;
+                    }
+                    foreach (var thrust in fwdThrusters)
+                    {
+                        thrust.Enabled = true;
+                        thrust.ThrustOverridePercentage = 1;
+                    }
+                    this.state = LaunchState.Boost;
+                }
+            }
+            else if (state == LaunchState.Boost)
             {
                 if ((this.Position - this.launchPos).LengthSquared() >= boostManeuverRange * boostManeuverRange)
                 {
@@ -392,7 +451,7 @@ namespace IngameScript
                 }
             }
 
-            if (state == LaunchState.Flight)
+            else if (state == LaunchState.Flight)
             {
 
                 double pitch, yaw, roll;
@@ -435,25 +494,22 @@ namespace IngameScript
                     ArmMissile();
                     this.trajectoryStage++;
                     this.state = LaunchState.Terminal;
+
                 }
             }
-            if (state == LaunchState.Terminal)
+            else if (state == LaunchState.Terminal)
             {
                 if ((this.Position - finalTarget.Coords).LengthSquared() <= blowDistance * blowDistance)
                 {
-                    Runtime.UpdateFrequency = UpdateFrequency.None;
-                    this.msgHandler.Dispose();
                     LogLine("Reached detonation threshold. Detonating and disabling script.");
                     LogStatus("Detonated.");
-                    foreach (var wh in warheads)
-                    {
-                        wh.Detonate();
-                    }
+                    Detonate();
                 }
             }
             status.State = this.state;
             LogStatus(status.ToString());
         }
+
 
         private void ArmMissile()
         {
@@ -467,6 +523,29 @@ namespace IngameScript
                 wh.IsArmed = true;
             }
             LogLine($"Entering terminal mode, warheads armed");
+        }
+
+        private void Detonate()
+        {
+            foreach (var wh in warheads)
+            {
+                wh.IsArmed = true;
+                wh.Detonate();
+            }
+            this.state = LaunchState.Detonated;
+            Dispose();
+        }
+
+        private void Abort()
+        {
+            this.state = LaunchState.Aborted;
+            Dispose();
+        }
+
+        public void Dispose()
+        {
+            Runtime.UpdateFrequency = UpdateFrequency.None;
+            this.msgHandler.Dispose();
         }
 
         private void LogStatus<TData>(TData status)
@@ -489,14 +568,15 @@ namespace IngameScript
                 if ((updateSource & UpdateType.IGC) != 0)
                 {
                     this.msgHandler.Tick();
-                } else
+                }
+                if ((updateSource & UpdateType.Update10) != 0)
                 {
                     Tick();
                 }
             }
             catch (Exception ex)
             {
-                LogLine($"Main exception: {ex}\nStacktrace:\n{ex.StackTrace}");
+                LogLine($"[{uuid}] Missile main exception: {ex}\nStacktrace:\n{ex.StackTrace}");
             }
         }
     }
