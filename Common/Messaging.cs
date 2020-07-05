@@ -46,6 +46,7 @@ namespace IngameScript
         private readonly IMyBroadcastListener listener;
         private readonly Action<string> logger = (st) => { };
         private readonly IEnumerable<CommandFactory> factories;
+        private bool disposed = false;
         public MessageHandler(IMyIntergridCommunicationSystem igc, string listenerTag,  IEnumerable<CommandFactory> factories, 
             Action<string> logger = null)
         {
@@ -66,10 +67,15 @@ namespace IngameScript
                 listener.DisableMessageCallback();
                 IGC.DisableBroadcastListener(this.listener);
                 logger($"{nameof(MessageHandler)} is being disposed.");
+                disposed = true;
             }
         }
         public void Tick()
         {
+            if (disposed)
+            {
+                return;
+            }
             while (listener.HasPendingMessage)
             {
                 var msg = listener.AcceptMessage();
