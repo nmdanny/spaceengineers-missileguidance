@@ -26,9 +26,12 @@ namespace IngameScript
         public enum LaunchState
         {
             PreLaunch,
+            Separation,
             Boost,
             Flight,
-            Terminal
+            Terminal,
+            Detonated,
+            Aborted
         }
         public class MissileStatus
         {
@@ -66,7 +69,8 @@ namespace IngameScript
     public enum MissileCommandTag : int
     {
         Launch = 1337,
-        ChangeTarget = 1338
+        ChangeTarget = 1338,
+        Abort = 1339
     }
 
 
@@ -127,6 +131,24 @@ namespace IngameScript
         protected override MyTuple<Vector3D> Serialize()
         {
             return MyTuple.Create(this.NewTarget);
+        }
+    }
+
+    public sealed class Abort : MissileCommand<bool>
+    {
+        public bool Detonate { get; private set; } = false;
+        protected override CommandFactory LocalFactory => FactoryInstance;
+        public static readonly Factory<Abort> FactoryInstance = new Factory<Abort>((int)MissileCommandTag.Abort);
+        public Abort() {}
+        public Abort(bool detonate) { Detonate = detonate; }
+        protected override void Deserialize(bool detonate)
+        {
+            this.Detonate = detonate;
+        }
+
+        protected override bool Serialize()
+        {
+            return Detonate;
         }
     }
 }

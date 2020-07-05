@@ -58,6 +58,17 @@ namespace IngameScript
             private void HandleSpecific(ChangeTarget command, long source)
             {
                 program.finalTarget = new MyWaypointInfo("Final-Destination", command.NewTarget);
+            private void HandleSpecific(Abort abort, long source)
+            {
+                if (program.state != LaunchState.PreLaunch)
+                {
+                    program.LogLine($"Received abort signal, detonate={abort.Detonate}");
+                    program.Abort();
+                    if (abort.Detonate)
+                    {
+                        program.Detonate();
+                    }
+                }
             }
 
             protected override void HandleMessage(object command, long source)
@@ -69,7 +80,12 @@ namespace IngameScript
                 else if (command is ChangeTarget)
                 {
                     HandleSpecific((ChangeTarget)command, source);
-                } else
+                }
+                else if (command is Abort)
+                {
+                    HandleSpecific((Abort)command, source);
+                }
+                else
                 {
                     throw new ArgumentException($"Received invalid command object from source {source}: {command}");
                 }

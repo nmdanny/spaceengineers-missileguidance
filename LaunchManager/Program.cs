@@ -60,9 +60,6 @@ namespace IngameScript
                 }
 
             }
-
-            LogLine($"Using command tag \"{tag}\" and status tag \"{statusTag}\".");
-
             if (missileMsgListener != null)
             {
                 missileMsgListener.DisableMessageCallback();
@@ -94,6 +91,7 @@ namespace IngameScript
             this.missileDiagLogger = new Logger(this, LOG_DISPLAY_SECTION, true);
             this.msgSender = new MessageSender(IGC);
             UpdateSettings();
+            LogLine("Finished LaunchManager initialization");
         }
 
         public void Save()
@@ -107,27 +105,36 @@ namespace IngameScript
         {
             try
             {
-                if ((updateSource & UpdateType.Terminal) == UpdateType.Terminal)
+                if ((updateSource & (UpdateType.Trigger | UpdateType.Terminal | UpdateType.Script)) != 0)
                 {
                     UpdateSettings();
-                }
-                if (argument.Contains("launch"))
-                {
-                    var coord = argument.Replace("launch ", "");
-                    MyWaypointInfo wp;
-                    if (MyWaypointInfo.TryParse(coord, out wp))
+                    if (argument.Contains("launch"))
                     {
-                        LogLine($"Sending launch signal with the following coordinate: {wp}");
-                        this.msgSender.Broadcast(new LaunchCommand(wp.Coords), tag);
-                        this.Runtime.UpdateFrequency = UpdateFrequency.Update100;
+                        var coord = argument.Replace("launch ", "");
+                        MyWaypointInfo wp;
+                        if (MyWaypointInfo.TryParse(coord, out wp))
+                        {
+                            this.msgSender.Broadcast(new LaunchCommand(wp.Coords), tag);
+                            this.Runtime.UpdateFrequency = UpdateFrequency.Update100;
+                            LogLine($"Sent launch signal with the following coordinate: {wp}");
+                        }
+                        else
+                        {
+                            LogLine($"Invalid GPS coordinates \"{coord}\", cannot initiate launch.");
+                        }
                     }
-                    else
+                    else if (argument.Contains("abort"))
                     {
-                        LogLine($"Invalid GPS coordinates \"{coord}\", cannot initiate launch.");
+                        this.msgSender.Broadcast(new Abort(), tag);
+                        LogLine($"Sent abort signal to all missiles");
+                    }
+                    else if (argument.Contains("detonate"))
+                    {
+                        this.msgSender.Broadcast(new Abort(true), tag);
+                        LogLine($"Send detonation signal to all missiles");
                     }
                 }
-
-                if ((updateSource & UpdateType.IGC) == UpdateType.IGC)
+                if ((updateSource & UpdateType.IGC) != 0)
                 {
                     if (missileMsgListener.HasPendingMessage)
                     {
@@ -142,9 +149,9 @@ namespace IngameScript
                     }
 
                 }
-                if ((updateSource & UpdateType.Update100) == UpdateType.Update100)
+                if ((updateSource & UpdateType.Update100) != 0)
                 {
-                    if (this.directorTurret.IsUnderControl)
+                    if (this.directing && this.directorTurret.IsUnderControl)
                     {
                         var azimuth = this.directorTurret.Azimuth;
                         var elev = this.directorTurret.Elevation;
@@ -154,7 +161,7 @@ namespace IngameScript
             }
             catch (Exception ex)
             {
-                LogLine($"Program() expection: {ex}\nStacktrace: \n{ex.StackTrace}");
+                LogLine($"Launch main expection: {ex}\nStacktrace: \n{ex.StackTrace}");
             }
         }
     }
