@@ -84,6 +84,7 @@ namespace IngameScript
         private const string STATUS_DISPLAY_SECTION = "MissileStatus";
         private const string SETTINGS_SECTION = "Settings";
         private const string SEPARATOR_MARKER = "Separator";
+        private const string MISSILE_ANTENNA = "MissileAntenna";
 
         private readonly string uuid = GetRandomString(5);
 
@@ -227,7 +228,7 @@ namespace IngameScript
                     gyro.Enabled = false;
                 }
 
-                GridTerminalSystem.GetBlocksOfType(antennas, b => b.CubeGrid == Me.CubeGrid);
+                GridTerminalSystem.GetBlocksOfType(antennas, b => b.CubeGrid == Me.CubeGrid && MyIni.HasSection(b.CustomData, MISSILE_ANTENNA));
                 foreach (var ant in antennas)
                 {
                     ant.Enabled = false;
