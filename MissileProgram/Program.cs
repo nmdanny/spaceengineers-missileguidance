@@ -156,7 +156,6 @@ namespace IngameScript
         private double blowDistance;
         private double boostManeuverRange;
         private double downSeparationRange;
-        private double separationEpsilon;
 
         private double armDistance;
 
@@ -187,10 +186,9 @@ namespace IngameScript
             this.blowDistance = parser.Get(SETTINGS_SECTION, "blowDistance").ToDouble(DEFAULT_BLOW_DISTANCE);
             this.boostManeuverRange = parser.Get(SETTINGS_SECTION, "boostRange").ToDouble(DEFAULT_BOOST_MANEUVER_RANGE);
             this.downSeparationRange = parser.Get(SETTINGS_SECTION, "downSeparationRange").ToDouble(DEFAULT_DOWN_SEPARATION_RANGE);
-            this.separationEpsilon = parser.Get(SETTINGS_SECTION, "separationEpsilon").ToDouble(DEFAULT_SEPARATION_EPSILON);
             this.armDistance = parser.Get(SETTINGS_SECTION, "armDistance").ToDouble(DEFAULT_ARM_DISTANCE);
             LogLine($"Boost range: {boostManeuverRange:F2}, arm distance: {armDistance:F2}, blow distance: {blowDistance:F2}", false);
-            LogLine($"down separation range: {downSeparationRange:F2} with epsilon: {separationEpsilon:F2}", false);
+            LogLine($"down separation range: {downSeparationRange:F2}", false);
 
             this.tag = parser.Get(SETTINGS_SECTION, "tag").ToString(MissileCommons.DEFAULT_TAG);
             this.msgHandler = new MissileMessageHandler(this, tag);
@@ -404,7 +402,7 @@ namespace IngameScript
             status.ExtraData.AppendLine($"Distance from launch position: {(this.Position - this.launchPos).Length():F2}");
             if (state == LaunchState.Separation)
             {
-                if ((this.Position - this.Target).LengthSquared() <= separationEpsilon * separationEpsilon)
+                if ((this.Position - this.launchPos).LengthSquared() >= downSeparationRange * downSeparationRange)
                 {
                     LogLine($"Separation phase finished, transitioning to boost phase");
                     foreach (var thrust in downThrusters)
