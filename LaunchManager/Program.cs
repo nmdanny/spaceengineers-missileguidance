@@ -19,8 +19,10 @@ using VRageMath;
 
 namespace IngameScript
 {
+
     partial class Program : MyGridProgram
     {
+        private MessageHandler messageHandler;
         private IMyBroadcastListener missileMsgListener;
         private IMyBroadcastListener missileStatusListener;
         private IMyLargeTurretBase directorTurret;
@@ -35,7 +37,57 @@ namespace IngameScript
         private string statusTag;
         private bool directing;
 
-        private readonly MessageSender msgSender;
+
+        private Dictionary<long, MissileStatus> portToMissileStatus = new Dictionary<long, MissileStatus>();
+
+        private void RegisterMissile(RegisterMissileCommand command, long source)
+        {
+            if (portToMissileStatus.ContainsKey(source))
+            {
+                LogLine($"Warning: tried to register missile at address {source} twice");
+                return;
+            }
+            LogLine($"Registered missile of UUID = {command.UUID} at address {source}");
+            portToMissileStatus.Add(source, new MissileStatus() { 
+                State = LaunchState.PreLaunch
+            });
+        }
+
+        private void LaunchMissiles(MyWaypointInfo tgt)
+        {
+            int launchCount = 0;
+            foreach (var kvp in portToMissileStatus)
+            {
+                if (kvp.Value.State == LaunchState.PreLaunch)
+                {
+                    IGC.SendUnicast(kvp.Key, new LaunchCommand() { Destination = tgt.Coords });
+                    ++launchCount;
+                }
+            }
+            LogLine($"Launched {launchCount} missiles to {tgt.Name} at {tgt.Coords}");
+        }
+
+        private void AbortMissiles(bool detonate)
+        {
+            int abortedMissiles = 0;
+            foreach (var kvp in portToMissileStatus)
+            {
+                if (kvp.Value.State != LaunchState.PreLaunch)
+                {
+                    IGC.SendUnicast(kvp.Key, new Abort() { Detonate = detonate});
+                    ++abortedMissiles;
+                }
+            }
+            LogLine($"Aborted {abortedMissiles}, detonate: {detonate}");
+        }
+
+        private MessageHandler CreateMessageHandler()
+        {
+            var handler = new MessageHandler(IGC, LogLine);
+            handler.RegisterHandler<RegisterMissileCommand>(new LambdaCommandHandler<RegisterMissileCommand>(RegisterMissile), acceptBroadcasts: true);
+            return handler;
+        }
+
         private void UpdateSettings()
         {
             var parser = new MyIni();
@@ -89,7 +141,8 @@ namespace IngameScript
         {
             this.statusLogger = new Logger(this, STATUS_DISPLAY_SECTION, true);
             this.missileDiagLogger = new Logger(this, LOG_DISPLAY_SECTION, true);
-            this.msgSender = new MessageSender(IGC);
+            this.messageHandler = CreateMessageHandler();
+            
             UpdateSettings();
             LogLine("Finished LaunchManager initialization");
         }
@@ -99,7 +152,7 @@ namespace IngameScript
 
         }
 
-
+            
 
         public void Main(string argument, UpdateType updateSource)
         {
@@ -114,9 +167,7 @@ namespace IngameScript
                         MyWaypointInfo wp;
                         if (MyWaypointInfo.TryParse(coord, out wp))
                         {
-                            this.msgSender.Broadcast(new LaunchCommand(wp.Coords), tag);
-                            this.Runtime.UpdateFrequency = UpdateFrequency.Update100;
-                            LogLine($"Sent launch signal with the following coordinate: {wp}");
+                            LaunchMissiles(wp);
                         }
                         else
                         {
@@ -125,13 +176,11 @@ namespace IngameScript
                     }
                     else if (argument.Contains("abort"))
                     {
-                        this.msgSender.Broadcast(new Abort(), tag);
-                        LogLine($"Sent abort signal to all missiles");
+                        AbortMissiles(detonate: false);
                     }
                     else if (argument.Contains("detonate"))
                     {
-                        this.msgSender.Broadcast(new Abort(true), tag);
-                        LogLine($"Send detonation signal to all missiles");
+                        AbortMissiles(detonate: true);
                     }
                 }
                 if ((updateSource & UpdateType.IGC) != 0)
@@ -147,6 +196,7 @@ namespace IngameScript
                         var msg = missileStatusListener.AcceptMessage();
                         statusLogger.OutputLine(msg.Data.ToString());
                     }
+                    messageHandler.Tick();
 
                 }
                 if ((updateSource & UpdateType.Update100) != 0)

@@ -9,6 +9,8 @@
     <Import_RootNamespace>IngameScript</Import_RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)Command.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)CommandHandler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Commons.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)MathStuff.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Messaging.cs" />

@@ -38,61 +38,37 @@ namespace IngameScript
                 IGC.SendBroadcastMessage(this.tag, $"[{uuid}] {msg}");
             }
         }
-
-        public class MissileMessageHandler: MessageHandler
+        private void HandleSpecific(LaunchCommand command, long source)
         {
-            private readonly Program program;
-            public MissileMessageHandler(Program program, string tag=MissileCommons.DEFAULT_TAG):
-                base(program.IGC, tag, new CommandFactory[] {
-                    LaunchCommand.FactoryInstance, ChangeTarget.FactoryInstance
-                }, msg => program.LogLine(msg, false))
-            {
-                this.program = program;
-            }
+            finalTarget = new MyWaypointInfo("Final-Destination", command.Destination);
+            Launch();
+        }
+        private void HandleSpecific(ChangeTarget command, long source)
+        {
+            finalTarget = new MyWaypointInfo("Final-Destination", command.NewTarget);
+            LogLine($"New final target at {finalTarget.Coords}");
+        }
 
-            private void HandleSpecific(LaunchCommand command, long source)
+        private void HandleSpecific(Abort abort, long source)
+        {
+            if (state != LaunchState.PreLaunch)
             {
-                program.finalTarget = new MyWaypointInfo("Final-Destination", command.Destination);
-                program.Launch();
+                LogLine($"Received abort signal, detonate={abort.Detonate}");
+                Abort();
+                if (abort.Detonate)
+                {
+                    Detonate();
+                }
             }
-            private void HandleSpecific(ChangeTarget command, long source)
-            {
-                program.finalTarget = new MyWaypointInfo("Final-Destination", command.NewTarget);
-                program.LogLine($"New final target at {program.finalTarget.Coords}");
-            }
+        }
 
-            private void HandleSpecific(Abort abort, long source)
-            {
-                if (program.state != LaunchState.PreLaunch)
-                {
-                    program.LogLine($"Received abort signal, detonate={abort.Detonate}");
-                    program.Abort();
-                    if (abort.Detonate)
-                    {
-                        program.Detonate();
-                    }
-                }
-            }
-
-            protected override void HandleMessage(object command, long source)
-            {
-                if (command is LaunchCommand)
-                {
-                    HandleSpecific((LaunchCommand)command, source);
-                }
-                else if (command is ChangeTarget)
-                {
-                    HandleSpecific((ChangeTarget)command, source);
-                }
-                else if (command is Abort)
-                {
-                    HandleSpecific((Abort)command, source);
-                }
-                else
-                {
-                    throw new ArgumentException($"Received invalid command object from source {source}: {command}");
-                }
-            }
+        private MessageHandler CreateMessageHandler()
+        {
+            var handler = new MessageHandler(IGC, (st) => LogLine(st, false));
+            handler.RegisterHandler<LaunchCommand>(new LambdaCommandHandler<LaunchCommand>(HandleSpecific));
+            handler.RegisterHandler<ChangeTarget>(new LambdaCommandHandler<ChangeTarget>(HandleSpecific));
+            handler.RegisterHandler<Abort>(new LambdaCommandHandler<Abort>(HandleSpecific));
+            return handler;
         }
 
         private const double DEFAULT_BLOW_DISTANCE = 15;
@@ -147,7 +123,7 @@ namespace IngameScript
         private List<IMyWarhead> warheads = new List<IMyWarhead>();
         private List<IMyRadioAntenna> antennas = new List<IMyRadioAntenna>();
         private IMyRemoteControl remote; // assumed to be pointing forward
-        private MissileMessageHandler msgHandler;
+        private MessageHandler msgHandler;
 
         private MyWaypointInfo finalTarget;
         private bool armed = false;
@@ -191,7 +167,6 @@ namespace IngameScript
             LogLine($"down separation range: {downSeparationRange:F2}", false);
 
             this.tag = parser.Get(SETTINGS_SECTION, "tag").ToString(MissileCommons.DEFAULT_TAG);
-            this.msgHandler = new MissileMessageHandler(this, tag);
 
             this.statusTag = parser.Get(SETTINGS_SECTION, "statusTag").ToString(MissileCommons.STATUS_TAG);
             if (!this.applyGyro)
@@ -285,6 +260,8 @@ namespace IngameScript
 
                 LogLine("Missile is ready to launch");
                 LogStatus("Missile: Pre-flight");
+                this.msgHandler = CreateMessageHandler();
+                IGC.SendBroadcast(new RegisterMissileCommand() { UUID = uuid});
             }
             catch (Exception ex)
             {
@@ -328,6 +305,11 @@ namespace IngameScript
 
         private void Launch()
         {
+            if (state != LaunchState.PreLaunch)
+            {
+                LogLine($"ERROR: Got duplicate launch command, ignoring it");
+                return;
+            }
             LogLine($"Launching to '{finalTarget.Name}'\nOrigin coords: {launchPos}\nDestination coords: {finalTarget.Coords}");
 
             if (separator != null)

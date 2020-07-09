@@ -66,87 +66,83 @@ namespace IngameScript
         }
     }
 
-    public enum MissileCommandTag : int
-    {
-        Launch = 1337,
-        ChangeTarget = 1338,
-        Abort = 1339
-    }
-
-
-    
     public abstract class MissileCommand<TData> : Command<TData>
     {
     }
-    public sealed class LaunchCommand : MissileCommand<MyTuple<Vector3D>>
+
+    public sealed class RegisterMissileCommand : MissileCommand<string>
     {
-        
-        public Vector3D Destination { get; private set; }
+        public string UUID { get; set; }
 
-        protected override CommandFactory LocalFactory => FactoryInstance;
-        public static readonly Factory<LaunchCommand> FactoryInstance = new Factory<LaunchCommand>((int)MissileCommandTag.Launch);
 
-        public LaunchCommand() { }
-
-        public LaunchCommand(Vector3D coord)
+        protected override bool Deserialize(string data)
         {
-            this.Destination = coord;
+            UUID = data;
+            return true;
         }
 
-
-
-        protected override void Deserialize(MyTuple<Vector3D> arr)
+        public override string Serialize()
         {
-            this.Destination = arr.Item1;
-        }
-
-        protected override MyTuple<Vector3D> Serialize()
-        {
-            return MyTuple.Create(this.Destination);
+            return UUID;
         }
     }
 
-    public sealed class ChangeTarget : MissileCommand<MyTuple<Vector3D>>
+    public sealed class RegisterLauncherCommand : MissileCommand<bool>
+    {
+        public override bool Serialize()
+        {
+            return true;
+        }
+
+        protected override bool Deserialize(bool data)
+        {
+            return true;
+        }
+    }
+
+    public sealed class LaunchCommand : MissileCommand<Vector3D>
+    {
+        public Vector3D Destination { get; set; }
+
+        protected override bool Deserialize(Vector3D dest)
+        {
+            this.Destination = dest;
+            return true;
+        }
+
+        public override Vector3D Serialize()
+        {
+            return this.Destination;
+        }
+    }
+
+    public sealed class ChangeTarget : MissileCommand<Vector3D>
     {
 
-        public Vector3D NewTarget { get; private set; }
+        public Vector3D NewTarget { get; set; }
 
-        protected override CommandFactory LocalFactory => FactoryInstance;
-        public static readonly Factory<ChangeTarget> FactoryInstance = new Factory<ChangeTarget>((int)MissileCommandTag.ChangeTarget);
-
-
-        public ChangeTarget() { }
-        public ChangeTarget(Vector3D newTarget)
+        protected override bool Deserialize(Vector3D newTarget)
         {
             this.NewTarget = newTarget;
+            return true;
         }
 
-
-
-        protected override void Deserialize(MyTuple<Vector3D> tup)
+        public override Vector3D Serialize()
         {
-            this.NewTarget = tup.Item1;
-        }
-
-        protected override MyTuple<Vector3D> Serialize()
-        {
-            return MyTuple.Create(this.NewTarget);
+            return this.NewTarget;
         }
     }
 
     public sealed class Abort : MissileCommand<bool>
     {
-        public bool Detonate { get; private set; } = false;
-        protected override CommandFactory LocalFactory => FactoryInstance;
-        public static readonly Factory<Abort> FactoryInstance = new Factory<Abort>((int)MissileCommandTag.Abort);
-        public Abort() {}
-        public Abort(bool detonate) { Detonate = detonate; }
-        protected override void Deserialize(bool detonate)
+        public bool Detonate { get; set; } = false;
+        protected override bool Deserialize(bool detonate)
         {
             this.Detonate = detonate;
+            return true;
         }
 
-        protected override bool Serialize()
+        public override bool Serialize()
         {
             return Detonate;
         }

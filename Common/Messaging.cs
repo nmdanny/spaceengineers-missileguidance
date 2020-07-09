@@ -17,56 +17,131 @@ using VRage.Game.ObjectBuilders.Definitions;
 using VRage.Game;
 using VRage;
 using VRageMath;
+using System.Runtime.Serialization;
+using VRageRender;
+using System.Diagnostics.Eventing.Reader;
 
 namespace IngameScript
 {
-    public class MessageSender
+
+    
+    /// <summary>
+    /// A base class that handles all broadcast/unicast messages received via IGC
+    /// </summary>
+    public class MessageHandler: IDisposable
     {
         private readonly IMyIntergridCommunicationSystem IGC;
-        public MessageSender(IMyIntergridCommunicationSystem igc)
-        {
-            this.IGC = igc;
-        }
-        public void Broadcast<TData>(Command<TData> cmd, string tag)
-        {
-            var data = cmd.Sendable();
-            this.IGC.SendBroadcastMessage(tag, data);
-        }
-        public void Unicast<TData>(Command<TData> cmd, string tag, long addressee)
-        {
-            var data = cmd.Sendable();
-            this.IGC.SendUnicastMessage(addressee, tag, data);
-        }
-    }
-
-
-    public abstract class MessageHandler: IDisposable
-    {
-        private readonly IMyIntergridCommunicationSystem IGC;
-        private readonly IMyBroadcastListener listener;
+        private readonly IList<IMyBroadcastListener> broadcastListeners = new List<IMyBroadcastListener>();
         private readonly Action<string> logger = (st) => { };
-        private readonly IEnumerable<CommandFactory> factories;
-        private bool disposed = false;
-        public MessageHandler(IMyIntergridCommunicationSystem igc, string listenerTag,  IEnumerable<CommandFactory> factories, 
-            Action<string> logger = null)
+
+        /// <summary>
+        /// Maps message type to a function that tries to parse it into an ICommand
+        /// </summary>
+        private Dictionary<string, Func<object, ICommand>> CommandParsers { get; set; } = new Dictionary<string, Func<object, ICommand>>();
+
+        public Dictionary<string, ICommandHandler> CommandHandlers { get; private set; } = new Dictionary<string, ICommandHandler>();
+
+        /// <summary>
+        /// Registers an ICommand parser
+        /// </summary>
+        /// <typeparam name="TCommand">Type of command, this is used to determine the parsing process</typeparam>
+        /// <param name="messageType">Integer identifying message type, to differentiate between parsers</param>
+        private void RegisterParser<TCommand>() where TCommand: ICommand, new()
         {
+            var messageType = new TCommand().Tag;
+            if (CommandParsers.ContainsKey(messageType))
+            {
+                throw new ArgumentException($"A parser for tag {messageType} is already registered");
+            }
+            CommandParsers.Add(messageType, (object obj) =>
+            {
+                TCommand cmd = new TCommand();
+                if (cmd.Deserialize(obj))
+                {
+                    return cmd;
+                }
+                return null;
+            });
+        }
+
+        /// <summary>
+        /// Registers an ICommand handler
+        /// </summary>
+        /// <typeparam name="TCommand">Type of command</typeparam>
+        /// <param name="handler">Handler</param>
+        /// <param name="acceptBroadcasts">Should we register a broadcast listener?</param>
+        /// <typeparam name="TCommand"></typeparam>
+        public void RegisterHandler<TCommand>(ICommandHandler handler, bool acceptBroadcasts = false) where TCommand: ICommand, new()
+        {
+            RegisterParser<TCommand>();
+            var messageType = new TCommand().Tag;
+            if (CommandHandlers.ContainsKey(messageType))
+            {
+                throw new ArgumentException($"A cmd-handler for tag {messageType} is already registered");
+            }
+            CommandHandlers.Add(messageType, handler);
+            if (acceptBroadcasts)
+            {
+                broadcastListeners.Add(IGC.RegisterBroadcastListener(messageType));
+            }
+        }
+
+        /// <summary>
+        /// Tries handling an IGC message, whether sent via broadcast or unicast
+        /// </summary>
+        /// <param name="msg">Message</param>
+        /// <returns>Did the handling succeed?</returns>
+        private bool TryHandle(MyIGCMessage msg)
+        {
+            if (!CommandParsers.ContainsKey(msg.Tag))
+            {
+                logger($"Can't find parser for tag {msg.Tag}");
+                return false;
+            }
+            var cmd = CommandParsers[msg.Tag](msg.Data);
+            if (cmd == null)
+            {
+                logger($"Failed to parse message of tag {msg.Tag}, whose data is {msg.Data}");
+                return false;
+            }
+            if (!CommandHandlers.ContainsKey(msg.Tag))
+            {
+                logger($"Parsed message of tag {msg.Tag} but couldn't find handler");
+                return false;
+            }
+            var handled = CommandHandlers[msg.Tag].tryHandle(cmd, msg.Source);
+            if (!handled)
+            {
+                logger($"Command handler couldn't handle message of tag {msg.Tag} whose inner data is {msg.Data}");
+                return false;
+            }
+            return true;
+        }
+
+
+
+        private bool disposed = false;
+        public MessageHandler(IMyIntergridCommunicationSystem igc, Action<string> logger = null)
+        {
+            
             this.IGC = igc;
-            this.listener = IGC.RegisterBroadcastListener(listenerTag);
-            this.listener.SetMessageCallback();
-            this.factories = factories;
+            IGC.UnicastListener.SetMessageCallback();
             if (logger != null)
             {
                 this.logger = logger;
             }
-            logger($"{nameof(MessageHandler)} has been created, listening on {listener.Tag}.");
+            logger($"{nameof(MessageHandler)} has been created");
         }
         public void Dispose()
         {
-            if (IGC != null)
+            if (!disposed)
             {
-                listener.DisableMessageCallback();
-                IGC.DisableBroadcastListener(this.listener);
                 logger($"{nameof(MessageHandler)} is being disposed.");
+                IGC.UnicastListener.DisableMessageCallback();
+                foreach (var listener in broadcastListeners)
+                {
+                    IGC.DisableBroadcastListener(listener);
+                }
                 disposed = true;
             }
         }
@@ -76,86 +151,23 @@ namespace IngameScript
             {
                 return;
             }
-            while (listener.HasPendingMessage)
+            while (IGC.UnicastListener.HasPendingMessage)
             {
-                var msg = listener.AcceptMessage();
-                if (msg.Tag == this.listener.Tag)
+                var msg = IGC.UnicastListener.AcceptMessage();
+                TryHandle(msg);
+            }
+            
+            foreach (var listener in broadcastListeners)
+            {
+                if (listener.HasPendingMessage)
                 {
-                    foreach (var fac in this.factories)
-                    {
-                        object cmd;
-                        if (fac.TryCreate(msg.Data, out cmd))
-                        {
-                            HandleMessage(cmd, msg.Source);
-                            return;
-                        }
-                    }
-                    // TODO: this doesn't work with messaging belonging to other ships.
-                    /*
-                    throw new ArgumentException($"None of {nameof(MessageHandler)} factories could handle the message " +
-                        $"tag={msg.Tag}, data={msg.Data}.");
-                        */
-                }
-                else
-                {
-                    OnInvalidMessage(msg);
+                    var msg = listener.AcceptMessage();
+                    TryHandle(msg);
                 }
             }
         }
 
-        protected abstract void HandleMessage(object command, long source);
 
-        protected void OnInvalidMessage(MyIGCMessage message)
-        {
-            logger($"Received invalid message from {message.Source}: {message.Data}");
-        }
     }
 
-    public interface CommandFactory
-    {
-        bool TryCreate(object rawMsgData, out object cmd);
-        int Tag { get; }
-    }
-
-    public abstract class Command<TData>
-    {
-
-        public class Factory<C> : CommandFactory where C : Command<TData>, new()
-        {
-            private readonly int tag;
-            public Factory(int tag)
-            {
-                this.tag = tag;
-            }
-            public int Tag => this.tag;
-
-            public bool TryCreate(object rawMsgData, out object cmd)
-            {
-                if (rawMsgData is MyTuple<int, TData>)
-                {
-                    var tup = (MyTuple<int, TData>)rawMsgData;
-                    if (tup.Item1 == Tag)
-                    {
-                        var realCmd = new C();
-                        realCmd.Deserialize(tup.Item2);
-                        cmd = realCmd;
-                        return true;
-                    }
-                }
-                cmd = null;
-                return false;
-            }
-        }
-
-        public Command() { }
-        protected abstract CommandFactory LocalFactory { get; }
-        public int Tag => LocalFactory.Tag;
-        protected abstract TData Serialize();
-        
-        public MyTuple<int, TData> Sendable()
-        {
-            return MyTuple.Create(Tag, Serialize());
-        }
-        protected abstract void Deserialize(TData data);
-    }
 }
