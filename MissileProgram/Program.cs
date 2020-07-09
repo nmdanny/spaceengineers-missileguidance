@@ -102,6 +102,7 @@ namespace IngameScript
         private const double SWITCH_WAY_POINT_DISTANCE = 100;
         private const double DEFAULT_ARM_DISTANCE = 100;
         private const double MIN_ANGLE_FOR_ENGINE_RESTART = 25;
+        private const string REFERENCE_RM = "ReferenceRemote";
         private const string STATUS_DISPLAY_SECTION = "MissileStatus";
         private const string SETTINGS_SECTION = "Settings";
         private const string SEPARATOR_MARKER = "Separator";
@@ -224,7 +225,7 @@ namespace IngameScript
                 UpdateSettings();
                 ResetDisplay();
 
-                this.remote = GridTerminalSystem.GetBlockOfType<IMyRemoteControl>(rm => rm.CubeGrid == Me.CubeGrid);
+                this.remote = GridTerminalSystem.GetBlockOfType<IMyRemoteControl>(rm => rm.CubeGrid == Me.CubeGrid && MyIni.HasSection(rm.CustomData, REFERENCE_RM));
 
                 if (remote == null)
                 {
